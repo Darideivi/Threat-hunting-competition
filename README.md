@@ -1,7 +1,7 @@
 # Threat Hunt Report: Port of Entry
 
 <p align="center">
-  <img width="740" height="1110" alt="image" src="https://github.com/user-attachments/assets/09b44f4a-1670-4804-8009-5287751e7e8d" />
+  <img width="518" height="777" alt="image" src="https://github.com/user-attachments/assets/09b44f4a-1670-4804-8009-5287751e7e8d" />
 </p>
 
 <p align="center">
