@@ -19,8 +19,8 @@
 | **Evidence Source** | Microsoft Defender for Endpoint logs (Azure) |
 | **Host Investigated** | `azuki-sl` |
 | **Incident Window** | November 18–21, 2025 (primary activity Nov 20, ~01:37–02:11 AM) |
-| **Analyst** | Fredrick Wilson |
-| **Date Completed** | 11/25/2025 |
+| **Analyst** | David Pena |
+| **Date Completed** | 06/30/2026 |
 
 
 
