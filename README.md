@@ -22,7 +22,7 @@
 | **Analyst** | Fredrick Wilson |
 | **Date Completed** | 11/25/2025 |
 
-**Analyst note:** timestamps are approximate — this was one of my earliest hunts and I didn't capture exact log times consistently. Treat the times below as sequencing, not forensic-grade precision.
+
 
 ---
 
