@@ -1,621 +1,579 @@
-# Threat Hunting Investigation: Full Attack Chain Reconstruction
+# Threat Hunt Report: Port of Entry
 
 <p align="center">
-  <img
-    src="https://github.com/user-attachments/assets/337bb215-8833-4653-b570-93c443bd9c11"
-    width="1000"
-    alt="Threat Hunt Cover Image"
-  />
+  <img width="740" alt="Port of Entry cover" src="https://github.com/user-attachments/assets/09b44f4a-1670-4804-8009-5287751e7e8d" />
 </p>
 
 <p align="center">
-  <em>End-to-end reconstruction of a simulated intrusion using Microsoft Defender for Endpoint and Microsoft Sentinel</em>
+  <em>Reconstructing a full intrusion chain — from RDP foothold to data exfiltration — using Microsoft Defender for Endpoint</em>
 </p>
 
 ---
 
-## Executive Summary
-
-This investigation reconstructs a complete attacker kill chain using Microsoft Defender for Endpoint (MDE) and Microsoft Sentinel. Twenty forensic artifacts were identified across the full attack lifecycle — from initial access via Remote Desktop Protocol (RDP) through credential dumping, persistence, command-and-control, data exfiltration, and lateral movement. Each stage was investigated with KQL queries and mapped to the MITRE ATT&CK framework to demonstrate how endpoint telemetry can be used to reconstruct a real-world intrusion.
-
-**Key outcome:** the attacker moved from a single exposed RDP endpoint to full domain-adjacent compromise in under [X hours], evading initial detection via Defender exclusion tampering before being identified through [detection method].
-
----
-
-## Hunt Objectives
-
-- Investigate a complete simulated cyberattack using Microsoft Defender for Endpoint
-- Build KQL queries to surface attacker activity across multiple telemetry tables
-- Correlate evidence across endpoint logs to reconstruct a single coherent timeline
-- Map attacker behavior to the MITRE ATT&CK framework
-- Document findings and provide actionable defensive recommendations
-
----
-
-## Environment & Scope
+## Incident Brief
 
 | | |
 |---|---|
-| **Platform** | Microsoft Defender for Endpoint (MDE) |
-| **SIEM** | Microsoft Sentinel |
-| **Query Engine** | Azure Log Analytics Workspace (KQL) |
-| **Target** | Windows Endpoint |
-| **Frameworks** | MITRE ATT&CK, NIST 800-61 Incident Response Lifecycle |
+| **Company** | Azuki Import/Export Trading Co. (梓貿易株式会社) — 23 employees, shipping logistics, Japan/SE Asia |
+| **Trigger** | A competitor undercut a 6-year shipping contract by exactly 3%. Supplier contracts and pricing data later surfaced on underground forums. |
+| **Evidence Source** | Microsoft Defender for Endpoint logs (Azure) |
+| **Host Investigated** | `azuki-sl` |
+| **Incident Window** | November 18–21, 2025 (primary activity Nov 20, ~01:37–02:11 AM) |
+| **Analyst** | Fredrick Wilson |
+| **Date Completed** | 11/25/2025 |
 
-**Data sources used:**
-`DeviceLogonEvents` · `DeviceProcessEvents` · `DeviceFileEvents` · `DeviceNetworkEvents` · `DeviceRegistryEvents`
-
-**Skills demonstrated:** Threat Hunting · Incident Response · KQL · MITRE ATT&CK Mapping · Detection Engineering · Digital Forensics · Log Analysis
+**Analyst note:** timestamps are approximate — this was one of my earliest hunts and I didn't capture exact log times consistently. Treat the times below as sequencing, not forensic-grade precision.
 
 ---
 
-## Attack Chain Overview
+## Scenario Overview
 
-```text
-Internet
-   │
-   ▼
-RDP Login ─────────────────► Initial Access
-   │
-   ▼
-Network Discovery ─────────► Recon
-   │
-   ▼
-Defender Exclusion Added ──► Defense Evasion
-   │
-   ▼
-Malware Download (certutil) ► Execution
-   │
-   ▼
-Scheduled Task ─────────────► Persistence
-   │
-   ▼
-C2 Beacon ──────────────────► Command & Control
-   │
-   ▼
-Mimikatz (LSASS Dump) ──────► Credential Access
-   │
-   ▼
-Archive Sensitive Files ────► Collection
-   │
-   ▼
-Discord Exfiltration ───────► Exfiltration
-   │
-   ▼
-Clear Event Logs ───────────► Defense Evasion
-   │
-   ▼
-Backdoor Local Account ─────► Persistence
-   │
-   ▼
-RDP to Second Host ─────────► Lateral Movement
+A 6-year shipping contract was underbid by a competitor at a suspiciously precise margin, and the pricing data behind that contract turned up for sale on underground forums. That pointed to a targeted data theft rather than a generic malware infection — the hunt was framed around finding how an attacker got in, what they took, and where they tried to go next.
+
+**Starting query:**
+```kql
+DeviceProcessEvents
+| where DeviceName == "azuki-sl"
+| where Timestamp between (datetime(2025-11-19) .. datetime(2025-11-20))
 ```
+
+---
+
+## Chronological Timeline
+
+| Time (approx.) | Flag | Stage | Action Observed |
+|---|---|---|---|
+| 11/18–11/21 | 1 | Initial Access | RDP connection from external IP `88.97.178.12` |
+| 11/18–11/21 | 2 | Initial Access | Successful logon using compromised account `kenji.sato` |
+| 11/19–11/21 | 3 | Discovery | `arp -a` executed to enumerate the local network |
+| 11/20 01:37 AM | 18 | Execution | PowerShell script `wupdate.ps1` executed to kick off the attack chain |
+| 11/20 01:37 AM | 10 | Command & Control | Outbound beacon from `svchost.exe` to C2 IP `78.141.196.6` on port 443 |
+| 11/19–11/21 | 11 | Command & Control | C2 traffic persists over port 443 |
+| 11/20 ~02:05 AM | 4 | Defense Evasion | Hidden staging directory `C:\ProgramData\WindowsCache` created |
+| 11/19–11/21 | 5 | Defense Evasion | 3 file extensions added to Defender exclusions |
+| 11/19–11/21 | 6 | Defense Evasion | Defender exclusion added for the Temp folder |
+| 11/20 02:06 AM | 7 | Defense Evasion | `certutil.exe` used to download the malicious payload |
+| 11/20 02:07 AM | 12 | Credential Access | Renamed Mimikatz (`mm.exe`) downloaded and staged |
+| 11/20 02:07 AM | 8 | Persistence | Scheduled task `Windows Update Check` created |
+| 11/20 02:07 AM | 9 | Persistence | Task configured to run `C:\ProgramData\WindowsCache\svchost.exe` |
+| 11/20 02:08 AM | 13 | Credential Access | `mm.exe` executed with `privilege::debug sekurlsa::logonpasswords exit` |
+| 11/20 ~02:08 AM | 14 | Collection | `export-data.zip` and other archives staged |
+| 11/20 02:09 AM | 15 | Exfiltration | `curl.exe` uploads `export-data.zip` to Discord over HTTPS |
+| 11/20 02:10 AM | 19 | Lateral Movement | RDP attempted to internal host `10.1.0.188` |
+| 11/20 02:10 AM | 20 | Lateral Movement | `mstsc.exe` launched to reach `10.1.0.188` |
+| 11/20 02:11 AM | 16 | Anti-Forensics | `wevtutil.exe` clears the Security log |
+| Post-activity | 17 | Impact / Persistence | Hidden local admin account `support` created |
 
 ---
 
 ## MITRE ATT&CK Mapping
 
-| # | Stage | Tactic | Technique | ID |
-|---|-------|--------|-----------|-----|
-| 1 | Initial Access | Initial Access | Remote Services (RDP) | T1021.001 |
-| 2 | Network Discovery | Discovery | System Network Config Discovery | T1016 |
-| 3 | Defender Exclusion | Defense Evasion | Modify Security Tools | T1562.001 |
-| 4 | Malware Staging | Execution | PowerShell | T1059.001 |
-| 5 | Malware Download | Command & Control | Ingress Tool Transfer | T1105 |
-| 6 | Scheduled Task | Persistence | Scheduled Task/Job | T1053.005 |
-| 7 | Credential Dumping | Credential Access | LSASS Memory | T1003.001 |
-| 8 | Data Collection | Collection | Archive via Utility | T1560.001 |
-| 9 | Exfiltration | Exfiltration | Exfiltration Over Web Service | T1567 |
-| 10 | Log Clearing | Defense Evasion | Clear Windows Event Logs | T1070.001 |
-| 11 | Backdoor Account | Persistence | Local Account | T1136.001 |
-| 12 | Lateral Movement | Lateral Movement | Remote Desktop Protocol | T1021.001 |
+| Flag | Tactic | Technique | ID |
+|---|---|---|---|
+| 1 | Initial Access | External Remote Services | T1133 |
+| 2 | Initial Access | Valid Accounts | T1078 |
+| 3 | Discovery | Remote System Discovery | T1018 |
+| 4 | Defense Evasion | Hide Artifacts | T1564 |
+| 5, 6 | Defense Evasion | Impair Defenses: Disable/Modify Tools | T1562.001 |
+| 7 | Defense Evasion / C2 | Ingress Tool Transfer | T1105 |
+| 8, 9 | Persistence | Scheduled Task | T1053.005 |
+| 10 | Command & Control | Application Layer Protocol | T1071 |
+| 11 | Command & Control | Non-Standard Port / HTTPS blending | T1571 |
+| 12 | Credential Access | OS Credential Dumping | T1003 |
+| 13 | Credential Access | LSASS Memory | T1003.001 |
+| 14 | Collection | Archive Collected Data | T1560 |
+| 15 | Exfiltration | Exfiltration Over Web Service | T1567 |
+| 16 | Defense Evasion | Clear Windows Event Logs | T1070.001 |
+| 17 | Persistence / Impact | Account Manipulation | T1098 |
+| 18 | Execution | PowerShell | T1059.001 |
+| 19, 20 | Lateral Movement | Remote Services / RDP | T1021, T1021.001 |
 
 ---
 
-## Table of Contents
+## Attack Chain
 
-- [Flag 1 — Initial Access via RDP](#flag-1--initial-access-via-rdp)
-- [Flag 2 — Network Discovery](#flag-2)
-- [Flag 3 — Defender Exclusion Added](#flag-3)
-- [Flag 4 — Malware Staging Directory](#flag-4)
-- [Flag 5 — Malware Download via certutil](#flag-5)
-- [Flag 6 — Scheduled Task Persistence](#flag-6)
-- [Flag 7 — Command & Control Beacon](#flag-7)
-- [Flag 8 — Mimikatz Execution](#flag-8)
-- [Flag 9 — LSASS Credential Dumping](#flag-9)
-- [Flag 10 — Data Collection & Staging](#flag-10)
-- [Flag 11 — Archive Creation](#flag-11)
-- [Flag 12 — Discord Exfiltration](#flag-12)
-- [Flag 13 — [Name TBD]](#flag-13)
-- [Flag 14 — [Name TBD]](#flag-14)
-- [Flag 15 — [Name TBD]](#flag-15)
-- [Flag 16 — Event Log Clearing](#flag-16)
-- [Flag 17 — [Name TBD]](#flag-17)
-- [Flag 18 — Backdoor Admin Account Created](#flag-18)
-- [Flag 19 — [Name TBD]](#flag-19)
-- [Flag 20 — Lateral Movement via RDP](#flag-20)
-- [Detection Gaps & Recommendations](#detection-gaps--recommendations)
-- [Final Assessment](#final-assessment)
-
-> Titles above are placeholders based on the attack chain order — rename once we fill in each flag's real technique.
+```text
+External IP (88.97.178.12)
+        │  RDP logon as kenji.sato
+        ▼
+Network Recon (arp -a)
+        │
+        ▼
+wupdate.ps1 executed ──► C2 beacon to 78.141.196.6:443
+        │
+        ▼
+Hidden staging dir: C:\ProgramData\WindowsCache
+        │
+        ▼
+Defender exclusions added (3 extensions + Temp folder)
+        │
+        ▼
+certutil.exe downloads payload
+        │
+        ▼
+mm.exe (renamed Mimikatz) staged ──► scheduled task "Windows Update Check"
+        │                                   │
+        ▼                                   ▼
+LSASS dump (sekurlsa::logonpasswords)   runs svchost.exe from staging dir
+        │
+        ▼
+export-data.zip staged
+        │
+        ▼
+Exfil via curl.exe → Discord (HTTPS)
+        │
+        ▼
+Security log cleared (wevtutil)
+        │
+        ▼
+Hidden admin account "support" created
+        │
+        ▼
+RDP/mstsc.exe → 10.1.0.188 (lateral movement attempt)
+```
 
 ---
 
 ## Flag Analysis
 
-### Flag 1 — Initial Access via RDP
+### Flag 1 — Initial Access: Remote Access Source
+**Tactic/Technique:** Initial Access — External Remote Services (T1133)
 
-| | |
-|---|---|
-| **Tactic / Technique** | Initial Access — Remote Services (T1021.001) |
-| **Source IP** | `88.97.178.12` |
-| **Compromised Account** | `kenji.sato` |
-| **Data Source** | `DeviceLogonEvents` |
+**Findings:** `88.97.178.12` is the source IP of the RDP connection into `azuki-sl`.
 
-**Findings**
-The attacker authenticated to the endpoint over RDP using the compromised account `kenji.sato`, originating from external IP `88.97.178.12`.
+**Why it matters:** This is the attacker's entry point. Pinpointing it lets defenders block the IP at the firewall, check threat intel for known-bad attribution, and correlate against other incidents — the external source is the fastest lead toward "who's behind this."
 
-**Why it matters**
-_[1-2 sentences: what this tells us about attacker access level / exposure]_
-
-**KQL Query**
 ```kql
-// Add the query used to surface this event
+DeviceLogonEvents
+| where DeviceName == "azuki-sl"
+| where Timestamp between (datetime(2025-11-18) .. datetime(2025-11-21))
+| where RemoteIP contains "."
+| where ActionType == "LogonSuccess"
+| project Timestamp, ActionType, AccountName, RemoteIP, RemoteIPType, RemoteDeviceName
+| order by Timestamp asc
 ```
+<img width="1739" alt="Flag 1 evidence" src="https://github.com/user-attachments/assets/0a155b6a-d56c-477c-9cf5-6f8f08e15e52" />
 
-**Screenshot**
-`![Flag 1 evidence](path/to/screenshot.png)`
-
-**Detection Recommendation**
-_[Actionable hunting tip — e.g. alert on RDP logons from external/unexpected geolocations]_
+**Detection recommendation:** Alert on interactive logons from external/unexpected geolocations, and disable direct internet-facing RDP where possible.
 
 ---
 
-### Flag 2
-**Tactic / Technique:** Discovery — System Network Configuration Discovery (T1016)
+### Flag 2 — Initial Access: Compromised User Account
+**Tactic/Technique:** Initial Access — Valid Accounts (T1078)
 
-| | |
-|---|---|
-| **Data Source** | `DeviceProcessEvents` |
-| **Command / Artifact** | _[fill in]_ |
+**Findings:** The account `kenji.sato` authenticated successfully during the RDP session identified in Flag 1.
 
-**Findings**
-_[what happened]_
+**Why it matters:** This is the compromised credential itself — the attacker's foothold. It should be disabled/reset immediately, and the compromise vector (phishing, credential reuse, etc.) needs investigating before trust is restored.
 
-**Why it matters**
-_[impact]_
-
-**KQL Query**
 ```kql
-
+DeviceLogonEvents
+| where DeviceName == "azuki-sl"
+| where Timestamp between (datetime(2025-11-18) .. datetime(2025-11-21))
+| where RemoteIP contains "."
+| where ActionType == "LogonSuccess"
+| project Timestamp, ActionType, AccountName, RemoteIP, RemoteIPType, RemoteDeviceName
+| order by Timestamp asc
 ```
+<img width="1739" alt="Flag 2 evidence" src="https://github.com/user-attachments/assets/346167c5-d6b6-4374-a139-d1db62b494b6" />
 
-**Screenshot**
-`![Flag 2 evidence](path/to/screenshot.png)`
-
-**Detection Recommendation**
-_[tip]_
+**Detection recommendation:** Flag first-time successful RDP logons paired with an external source IP as high-priority for review.
 
 ---
 
-### Flag 3
-**Tactic / Technique:** Defense Evasion — Modify Security Tools (T1562.001)
+### Flag 3 — Discovery: Network Reconnaissance
+**Tactic/Technique:** Discovery — Remote System Discovery (T1018)
 
-| | |
-|---|---|
-| **Data Source** | `DeviceRegistryEvents` |
-| **Artifact** | _[fill in — e.g. exclusion path added]_ |
+**Findings:** `ARP.EXE -a` was run to enumerate devices on the local network segment.
 
-**Findings**
-_[what happened]_
+**Why it matters:** This is the attacker mapping out lateral movement targets. Catching recon commands this early gives defenders a head start on which internal systems to watch more closely.
 
-**Why it matters**
-_[impact]_
-
-**KQL Query**
 ```kql
-
+DeviceProcessEvents
+| where DeviceName == "azuki-sl"
+| where Timestamp between (startofday(datetime(2025-11-19)) .. endofday(datetime(2025-11-21)))
+| project Timestamp, DeviceName, ProcessCommandLine, FolderPath, AccountName, IsProcessRemoteSession
 ```
+<img width="1709" alt="Flag 3 evidence" src="https://github.com/user-attachments/assets/2321e140-cf3b-4c28-ae5a-91a90feb3a6c" />
 
-**Screenshot**
-`![Flag 3 evidence](path/to/screenshot.png)`
-
-**Detection Recommendation**
-_[tip]_
+**Detection recommendation:** Alert on `arp.exe`, `net.exe`, or similar enumeration tools launched shortly after a new interactive logon.
 
 ---
 
-### Flag 4
-**Tactic / Technique:** _[fill in]_
+### Flag 4 — Defense Evasion: Malware Staging Directory
+**Tactic/Technique:** Defense Evasion — Hide Artifacts (T1564)
 
-| | |
-|---|---|
-| **Data Source** | _[fill in]_ |
-| **Artifact** | _[fill in]_ |
+**Findings:** A hidden directory, `C:\ProgramData\WindowsCache`, was created at 2:05:30 AM to stage tools and payloads.
 
-**Findings**
-_[what happened]_
+**Why it matters:** Using a `ProgramData` path makes the folder look semi-legitimate to a casual review. Flagging non-standard directory creation under system paths surfaces staging locations before the payloads inside them execute.
 
-**Why it matters**
-_[impact]_
-
-**KQL Query**
 ```kql
-
+DeviceFileEvents
+| where Timestamp between (startofday(datetime(2025-11-19)) .. endofday(datetime(2025-11-21)))
+| where DeviceName == "azuki-sl"
+| where InitiatingProcessFileName contains "powershell"
 ```
+<img width="1679" alt="Flag 4 evidence" src="https://github.com/user-attachments/assets/1dd10cdd-be4d-4e5c-af6d-463cdd687371" />
 
-**Screenshot**
-`![Flag 4 evidence](path/to/screenshot.png)`
-
-**Detection Recommendation**
-_[tip]_
+**Detection recommendation:** Alert on new directory creation under `ProgramData` or similar system paths by non-standard parent processes (e.g., PowerShell).
 
 ---
 
-### Flag 5
-**Tactic / Technique:** Command & Control — Ingress Tool Transfer (T1105)
+### Flag 5 — Defense Evasion: File Extension Exclusions
+**Tactic/Technique:** Defense Evasion — Impair Defenses: Disable or Modify Tools (T1562.001)
 
-| | |
-|---|---|
-| **Data Source** | `DeviceProcessEvents` |
-| **Tool Used** | `certutil.exe` |
+**Findings:** 3 file extensions were added to the Windows Defender `Exclusions\Extensions` registry key during the attack window.
 
-**Findings**
-_[what was downloaded, from where]_
+**Why it matters:** Excluding specific extensions gives downloaded malware of that type a guaranteed pass through AV scanning — a direct weakening of endpoint protection that should trigger an alert the moment it happens.
 
-**Why it matters**
-_[impact — LOLBin abuse bypassing file download controls]_
-
-**KQL Query**
 ```kql
-
+DeviceFileEvents
+| where Timestamp between (startofday(datetime(2025-11-19)) .. endofday(datetime(2025-11-21)))
+| where DeviceName == "azuki-sl"
+| where InitiatingProcessParentFileName contains "sense"
 ```
+<img width="1668" alt="Flag 5 evidence 1" src="https://github.com/user-attachments/assets/e4227628-f81c-4c71-8509-d8867114398e" />
+<img width="1678" alt="Flag 5 evidence 2" src="https://github.com/user-attachments/assets/d86c2602-327d-4996-a572-65bb1b582930" />
 
-**Screenshot**
-`![Flag 5 evidence](path/to/screenshot.png)`
-
-**Detection Recommendation**
-_[tip — alert on certutil.exe with -urlcache or -decode flags]_
+**Detection recommendation:** Alert on any write to Defender's exclusion registry keys (`Exclusions\Extensions`, `Exclusions\Paths`), regardless of initiating process.
 
 ---
 
-### Flag 6
-**Tactic / Technique:** Persistence — Scheduled Task (T1053.005)
+### Flag 6 — Defense Evasion: Temporary Folder Exclusion
+**Tactic/Technique:** Defense Evasion — Impair Defenses (T1562.001)
 
-| | |
-|---|---|
-| **Data Source** | `DeviceProcessEvents` |
-| **Task Name** | _[fill in]_ |
+**Findings:** `C:\Users\KENJI~1.SAT\AppData\Local\Temp` was added to Defender's `Exclusions\Paths`.
 
-**Findings**
-_[what task was created, what it runs]_
+**Why it matters:** Excluding Temp lets short-lived payloads execute there without ever being scanned — a common tactic for staged, single-use tools.
 
-**Why it matters**
-_[impact]_
-
-**KQL Query**
 ```kql
-
+DeviceRegistryEvents
+| where Timestamp between (startofday(datetime(2025-11-19)) .. endofday(datetime(2025-11-21)))
+| where DeviceName == "azuki-sl"
 ```
+<img width="1677" alt="Flag 6 evidence" src="https://github.com/user-attachments/assets/d19ed60a-9ddb-45e7-84b9-1641deef37f7" />
 
-**Screenshot**
-`![Flag 6 evidence](path/to/screenshot.png)`
-
-**Detection Recommendation**
-_[tip]_
+**Detection recommendation:** Treat Temp-folder or user-writable-path exclusions as high severity — legitimate business need for this is rare.
 
 ---
 
-### Flag 7
-**Tactic / Technique:** Command & Control — Beacon Activity
+### Flag 7 — Defense Evasion: Download Utility Abuse
+**Tactic/Technique:** Defense Evasion / C2 — Ingress Tool Transfer (T1105)
 
-| | |
-|---|---|
-| **Data Source** | `DeviceNetworkEvents` |
-| **C2 Server** | _[IP / domain]_ |
+**Findings:** `certutil.exe` was used at 2:06:58 AM to download the malicious payload.
 
-**Findings**
-_[beacon interval, protocol, destination]_
+**Why it matters:** Certutil is a signed, native Windows tool — using it to pull files avoids the scrutiny a third-party downloader would draw. This is a textbook living-off-the-land technique.
 
-**Why it matters**
-_[impact]_
-
-**KQL Query**
 ```kql
-
+DeviceProcessEvents
+| where DeviceName == "azuki-sl"
+| where Timestamp between (startofday(datetime(2025-11-19)) .. endofday(datetime(2025-11-21)))
+| where ProcessCommandLine contains "//"
+| project Timestamp, DeviceName, InitiatingProcessFileName, ProcessCommandLine, InitiatingProcessCommandLine, FolderPath, AccountName, IsProcessRemoteSession
 ```
+<img width="555" alt="Flag 7 evidence" src="https://github.com/user-attachments/assets/e2690950-e773-44b1-b292-40d35f1b3920" />
 
-**Screenshot**
-`![Flag 7 evidence](path/to/screenshot.png)`
-
-**Detection Recommendation**
-_[tip]_
+**Detection recommendation:** Alert on `certutil.exe` invoked with `-urlcache` or `-decode` — these flags are almost never used legitimately outside cert management workflows.
 
 ---
 
-### Flag 8
-**Tactic / Technique:** Credential Access — Mimikatz Execution
+### Flag 8 — Persistence: Scheduled Task Name
+**Tactic/Technique:** Persistence — Scheduled Task (T1053.005)
 
-| | |
-|---|---|
-| **Data Source** | `DeviceProcessEvents` |
-| **Process Name** | _[renamed Mimikatz binary name]_ |
+**Findings:** A scheduled task named `Windows Update Check` was created at 2:07:46 AM.
 
-**Findings**
-_[what was run, from where, under what account]_
+**Why it matters:** Naming the task to mimic legitimate Windows maintenance helps it survive casual review by an admin scanning the Task Scheduler list.
 
-**Why it matters**
-_[impact]_
-
-**KQL Query**
 ```kql
-
+DeviceProcessEvents
+| where DeviceName == "azuki-sl"
+| where Timestamp between (startofday(datetime(2025-11-19)) .. endofday(datetime(2025-11-21)))
+| where ProcessCommandLine contains "schtasks"
+| project Timestamp, DeviceName, InitiatingProcessFileName, ProcessCommandLine, InitiatingProcessCommandLine, FolderPath, AccountName, IsProcessRemoteSession
 ```
+<img width="545" alt="Flag 8 evidence" src="https://github.com/user-attachments/assets/6d53958a-2f9e-4841-bb1d-8ee5676b99c7" />
 
-**Screenshot**
-`![Flag 8 evidence](path/to/screenshot.png)`
-
-**Detection Recommendation**
-_[tip — hash-based detection resists renaming]_
+**Detection recommendation:** Baseline expected scheduled task names per fleet image; alert on new tasks with generic "Windows"-branded names created outside patch windows.
 
 ---
 
-### Flag 9
-**Tactic / Technique:** Credential Access — LSASS Memory (T1003.001)
+### Flag 9 — Persistence: Scheduled Task Target
+**Tactic/Technique:** Persistence — Scheduled Task (T1053.005)
 
-| | |
-|---|---|
-| **Data Source** | `DeviceProcessEvents` |
-| **Target Process** | `lsass.exe` |
+**Findings:** The task's `/tr` action points to `C:\ProgramData\WindowsCache\svchost.exe` — a copy of `svchost.exe` living outside its legitimate `System32` path.
 
-**Findings**
-_[dump method, output file if any]_
+**Why it matters:** This confirms the exact persistence payload and its location, enabling precise cleanup and giving defenders a specific anomalous-binary signature to hunt for elsewhere in the environment.
 
-**Why it matters**
-_[impact — credential theft enabling lateral movement]_
-
-**KQL Query**
 ```kql
-
+DeviceProcessEvents
+| where DeviceName == "azuki-sl"
+| where Timestamp between (startofday(datetime(2025-11-19)) .. endofday(datetime(2025-11-21)))
+| where ProcessCommandLine contains "schtasks"
+| project Timestamp, DeviceName, InitiatingProcessFileName, ProcessCommandLine, InitiatingProcessCommandLine, FolderPath, AccountName, IsProcessRemoteSession
 ```
+<img width="839" alt="Flag 9 evidence" src="https://github.com/user-attachments/assets/b8e1a986-c3c3-4d61-b6e4-f59b5ab802b3" />
 
-**Screenshot**
-`![Flag 9 evidence](path/to/screenshot.png)`
-
-**Detection Recommendation**
-_[tip]_
+**Detection recommendation:** Alert on any process named `svchost.exe` running from a path other than `C:\Windows\System32`.
 
 ---
 
-### Flag 10
-**Tactic / Technique:** Collection — Data Staging
+### Flag 10 — Command & Control: C2 Server Address
+**Tactic/Technique:** Command & Control — Application Layer Protocol (T1071)
 
-| | |
-|---|---|
-| **Data Source** | `DeviceFileEvents` |
-| **Staging Path** | _[fill in]_ |
+**Findings:** The malicious process beaconed out to `78.141.196.6` on port 443 at 1:37:26 AM.
 
-**Findings**
-_[what files were collected]_
+**Why it matters:** This IP is the attacker's infrastructure. Blocking it at the network edge cuts off further instructions and any additional payload delivery — a high-priority containment action.
 
-**Why it matters**
-_[impact]_
-
-**KQL Query**
 ```kql
-
+DeviceNetworkEvents
+| where Timestamp between (startofday(datetime(2025-11-19)) .. endofday(datetime(2025-11-21)))
+| where DeviceName == "azuki-sl"
 ```
+<img width="1703" alt="Flag 10 evidence" src="https://github.com/user-attachments/assets/5cd5847a-c4fb-4805-978c-697945ae0897" />
 
-**Screenshot**
-`![Flag 10 evidence](path/to/screenshot.png)`
-
-**Detection Recommendation**
-_[tip]_
+**Detection recommendation:** Cross-reference outbound IPs against threat intel feeds automatically; alert on connections from newly-created or renamed processes to previously unseen external IPs.
 
 ---
 
-### Flag 11
-**Tactic / Technique:** Collection — Archive via Utility (T1560.001)
+### Flag 11 — Command & Control: Communication Port
+**Tactic/Technique:** Command & Control — Non-Standard Port / Protocol Blending (T1571)
 
-| | |
-|---|---|
-| **Data Source** | `DeviceFileEvents` |
-| **Archive Name** | `export-data.zip` |
+**Findings:** All observed C2 traffic used port 443, blending with normal HTTPS.
 
-**Findings**
-_[compression tool used, archive contents]_
+**Why it matters:** Port-based firewall rules alone won't catch this — the traffic looks identical to routine web browsing at the port level, which pushes detection toward TLS inspection and behavioral analysis instead.
 
-**Why it matters**
-_[impact]_
-
-**KQL Query**
 ```kql
-
+DeviceNetworkEvents
+| where Timestamp between (startofday(datetime(2025-11-19)) .. endofday(datetime(2025-11-21)))
+| where DeviceName == "azuki-sl"
 ```
+<img width="1672" alt="Flag 11 evidence" src="https://github.com/user-attachments/assets/b0ef8b80-d0df-406c-ab5b-0bc61d8560a8" />
 
-**Screenshot**
-`![Flag 11 evidence](path/to/screenshot.png)`
-
-**Detection Recommendation**
-_[tip]_
+**Detection recommendation:** Deploy TLS inspection or JA3/JA3S fingerprinting where feasible; flag beaconing patterns (regular interval connections) regardless of destination port.
 
 ---
 
-### Flag 12
-**Tactic / Technique:** Exfiltration — Exfiltration Over Web Service (T1567)
+### Flag 12 — Credential Access: Credential Theft Tool
+**Tactic/Technique:** Credential Access — OS Credential Dumping (T1003)
 
-| | |
-|---|---|
-| **Data Source** | `DeviceNetworkEvents` |
-| **Destination** | Discord (webhook/CDN) |
+**Findings:** A renamed Mimikatz binary, `mm.exe`, was downloaded and staged in `WindowsCache` at 2:07:22 AM.
 
-**Findings**
-_[upload method, size, destination URL pattern]_
+**Why it matters:** Downloading a credential-dumping tool signals clear intent — the presence of this file is the moment to assume credential compromise is imminent and prepare for reactive rotation.
 
-**Why it matters**
-_[impact — legitimate SaaS abused to bypass egress filtering]_
-
-**KQL Query**
 ```kql
-
+DeviceFileEvents
+| where Timestamp between (startofday(datetime(2025-11-19)) .. endofday(datetime(2025-11-21)))
+| where DeviceName == "azuki-sl"
+| where FolderPath contains "cache"
 ```
+<img width="1692" alt="Flag 12 evidence" src="https://github.com/user-attachments/assets/8a4cf6e5-233d-4a59-858a-76f01b04313c" />
 
-**Screenshot**
-`![Flag 12 evidence](path/to/screenshot.png)`
-
-**Detection Recommendation**
-_[tip — flag large outbound transfers to consumer collaboration apps]_
+**Detection recommendation:** Use hash- and behavior-based detection for known credential-dumping tools — renaming defeats filename-based rules but not hash or memory-access-pattern detection.
 
 ---
 
-### Flag 13
-**Tactic / Technique:** _[fill in]_
+### Flag 13 — Credential Access: Memory Extraction Command
+**Tactic/Technique:** Credential Access — LSASS Memory (T1003.001)
 
-**Findings** · **Why it matters** · **KQL Query** · **Screenshot** · **Detection Recommendation**
-_[fill in]_
+**Findings:** `mm.exe` was executed with `privilege::debug sekurlsa::logonpasswords exit` at 2:08:26 AM.
 
----
+**Why it matters:** This confirms successful clear-text credential extraction from LSASS memory — not just an attempt. This finding alone justifies an enterprise-wide password reset and a push toward Credential Guard / LSA protection.
 
-### Flag 14
-**Tactic / Technique:** _[fill in]_
-
-**Findings** · **Why it matters** · **KQL Query** · **Screenshot** · **Detection Recommendation**
-_[fill in]_
-
----
-
-### Flag 15
-**Tactic / Technique:** _[fill in]_
-
-**Findings** · **Why it matters** · **KQL Query** · **Screenshot** · **Detection Recommendation**
-_[fill in]_
-
----
-
-### Flag 16
-**Tactic / Technique:** Defense Evasion — Clear Windows Event Logs (T1070.001)
-
-| | |
-|---|---|
-| **Data Source** | `DeviceProcessEvents` |
-| **Command Used** | _[e.g. wevtutil cl]_ |
-
-**Findings**
-_[which logs were cleared]_
-
-**Why it matters**
-_[impact — anti-forensics, evidence gap]_
-
-**KQL Query**
 ```kql
-
+DeviceProcessEvents
+| where DeviceName == "azuki-sl"
+| where Timestamp between (startofday(datetime(2025-11-19)) .. endofday(datetime(2025-11-21)))
+| where FileName contains "mm.exe"
+| project Timestamp, FileName, DeviceName, InitiatingProcessFileName, ProcessCommandLine, InitiatingProcessCommandLine, FolderPath, AccountName, IsProcessRemoteSession
 ```
+<img width="1713" alt="Flag 13 evidence" src="https://github.com/user-attachments/assets/36b8ab65-61e3-4963-956e-604ebc04d23f" />
 
-**Screenshot**
-`![Flag 16 evidence](path/to/screenshot.png)`
-
-**Detection Recommendation**
-_[tip — forward logs to SIEM before local clearing can erase them]_
+**Detection recommendation:** Alert on any process accessing `lsass.exe` memory outside of trusted security tooling; enable Credential Guard where hardware supports it.
 
 ---
 
-### Flag 17
-**Tactic / Technique:** _[fill in]_
+### Flag 14 — Collection: Data Staging Archive
+**Tactic/Technique:** Collection — Archive Collected Data (T1560)
 
-**Findings** · **Why it matters** · **KQL Query** · **Screenshot** · **Detection Recommendation**
-_[fill in]_
+**Findings:** `export-data.zip` and related archives (e.g., `VMAgentLogs.zip`) were created in the staging directory.
 
----
+**Why it matters:** The archive is the direct evidence of what was taken. Naming and contents here define the scope of the breach for legal/regulatory notification and customer-impact assessment.
 
-### Flag 18
-**Tactic / Technique:** Persistence — Local Account (T1136.001)
-
-| | |
-|---|---|
-| **Data Source** | `DeviceProcessEvents` |
-| **Account Created** | _[fill in]_ |
-
-**Findings**
-_[account name, admin group added to]_
-
-**Why it matters**
-_[impact — durable access surviving credential rotation]_
-
-**KQL Query**
 ```kql
-
+DeviceFileEvents
+| where Timestamp between (startofday(datetime(2025-11-19)) .. endofday(datetime(2025-11-21)))
+| where DeviceName == "azuki-sl"
+| where FileName contains ".zip"
 ```
+<img width="1096" alt="Flag 14 evidence" src="https://github.com/user-attachments/assets/79729a8a-c67f-4b52-89b3-68067296c30b" />
 
-**Screenshot**
-`![Flag 18 evidence](path/to/screenshot.png)`
-
-**Detection Recommendation**
-_[tip — alert on new local admin account creation]_
+**Detection recommendation:** Alert on archive creation in non-standard system directories, especially shortly after credential-dumping tool execution.
 
 ---
 
-### Flag 19
-**Tactic / Technique:** _[fill in]_
+### Flag 15 — Exfiltration: Channel
+**Tactic/Technique:** Exfiltration — Exfiltration Over Web Service (T1567)
 
-**Findings** · **Why it matters** · **KQL Query** · **Screenshot** · **Detection Recommendation**
-_[fill in]_
+**Findings:** `curl.exe` uploaded `export-data.zip` to Discord over HTTPS at 2:09:21 AM.
 
----
+**Why it matters:** Discord is a trusted, commonly-allowed consumer service — abusing it for exfiltration bypasses most egress filtering built around known-bad or unusual destinations, and highlights the case for DLP on approved SaaS tools too.
 
-### Flag 20
-**Tactic / Technique:** Lateral Movement — Remote Desktop Protocol (T1021.001)
-
-| | |
-|---|---|
-| **Data Source** | `DeviceLogonEvents` |
-| **Target Host** | _[second internal system]_ |
-
-**Findings**
-_[account used, source-to-target hop]_
-
-**Why it matters**
-_[impact — pivot beyond patient zero]_
-
-**KQL Query**
 ```kql
-
+DeviceNetworkEvents
+| where Timestamp between (startofday(datetime(2025-11-19)) .. endofday(datetime(2025-11-21)))
+| where DeviceName == "azuki-sl"
 ```
+<img width="624" alt="Flag 15 evidence" src="https://github.com/user-attachments/assets/f56ec8bb-3736-4c01-aa1d-553952a05961" />
 
-**Screenshot**
-`![Flag 20 evidence](path/to/screenshot.png)`
+**Detection recommendation:** Flag large outbound POST/upload traffic to consumer collaboration platforms (Discord, Telegram, etc.) originating from server or non-user-facing hosts.
 
-**Detection Recommendation**
-_[tip — alert on internal RDP from a host that itself was an RDP ingress point]_
+---
+
+### Flag 16 — Anti-Forensics: Log Tampering
+**Tactic/Technique:** Defense Evasion — Clear Windows Event Logs (T1070.001)
+
+**Findings:** `wevtutil.exe` cleared the Security log at 2:11:39 AM.
+
+**Why it matters:** Clearing Security first removes the authentication and privilege-use trail — a deliberate, sequenced anti-forensics move that argues strongly for centralized, real-time log forwarding so local clearing can't erase the evidence.
+
+```kql
+DeviceProcessEvents
+| where DeviceName == "azuki-sl"
+| where Timestamp between (startofday(datetime(2025-11-19)) .. endofday(datetime(2025-11-21)))
+| where ProcessCommandLine contains "wev"
+| project Timestamp, FileName, DeviceName, InitiatingProcessFileName, ProcessCommandLine, InitiatingProcessCommandLine, FolderPath, AccountName, IsProcessRemoteSession
+```
+<img width="1641" alt="Flag 16 evidence 1" src="https://github.com/user-attachments/assets/ed10b702-1075-4e29-8990-331d3b900ba8" />
+<img width="1677" alt="Flag 16 evidence 2" src="https://github.com/user-attachments/assets/182dccd6-c8af-47c5-b89a-318df8f1c4a4" />
+
+**Detection recommendation:** Alert immediately on any `wevtutil cl` (clear-log) execution — there's almost no legitimate reason for this outside controlled maintenance.
+
+---
+
+### Flag 17 — Persistence / Impact: Backdoor Account
+**Tactic/Technique:** Persistence — Account Manipulation (T1098)
+
+**Findings:** A hidden local administrator account named `support` was created and added to the Administrators group.
+
+**Why it matters:** This is the attacker's fallback access — durable even after `kenji.sato`'s credentials are reset. Removing it and auditing all local admin group membership is a required containment step.
+
+```kql
+DeviceProcessEvents
+| where DeviceName == "azuki-sl"
+| where Timestamp between (startofday(datetime(2025-11-19)) .. endofday(datetime(2025-11-21)))
+| where ProcessCommandLine contains "add"
+| project Timestamp, FileName, DeviceName, InitiatingProcessFileName, ProcessCommandLine, InitiatingProcessCommandLine, FolderPath, AccountName, IsProcessRemoteSession
+```
+<img width="1678" alt="Flag 17 evidence" src="https://github.com/user-attachments/assets/656c2f22-51e3-44be-90d7-dee068d70c56" />
+
+**Detection recommendation:** Alert on any local account creation followed immediately by addition to the Administrators group.
+
+---
+
+### Flag 18 — Execution: Malicious Script
+**Tactic/Technique:** Execution — PowerShell (T1059.001)
+
+**Findings:** `wupdate.ps1` executed at 1:37:40 AM, kicking off the observed attack chain.
+
+**Why it matters:** This script is effectively the attacker's playbook in automated form — recovering and analyzing it (where possible) reveals the full intended sequence and supports building detection signatures for reuse elsewhere.
+
+```kql
+DeviceProcessEvents
+| where DeviceName == "azuki-sl"
+| where Timestamp between (startofday(datetime(2025-11-19)) .. endofday(datetime(2025-11-21)))
+| where ProcessCommandLine contains "add"
+| project Timestamp, FileName, DeviceName, InitiatingProcessFileName, ProcessCommandLine, InitiatingProcessCommandLine, FolderPath, AccountName, IsProcessRemoteSession
+```
+<img width="1678" alt="Flag 18 evidence" src="https://github.com/user-attachments/assets/656c2f22-51e3-44be-90d7-dee068d70c56" />
+
+**Detection recommendation:** Alert on PowerShell scripts executed from Temp or user-profile directories immediately following a new remote logon.
+
+---
+
+### Flag 19 — Lateral Movement: Secondary Target
+**Tactic/Technique:** Lateral Movement — Remote Services (T1021)
+
+**Findings:** An RDP connection was attempted toward internal IP `10.1.0.188` at 2:10:41 AM.
+
+**Why it matters:** This is the attacker's next objective — likely a system with elevated privileges or more sensitive data. Identifying the intended target early lets defenders prioritize isolating that specific host.
+
+```kql
+DeviceProcessEvents
+| where DeviceName == "azuki-sl"
+| where Timestamp between (startofday(datetime(2025-11-19)) .. endofday(datetime(2025-11-21)))
+| where ProcessCommandLine contains "mstsc"
+| project Timestamp, FileName, DeviceName, InitiatingProcessFileName, ProcessCommandLine, InitiatingProcessCommandLine, FolderPath, AccountName, IsProcessRemoteSession
+```
+<img width="1670" alt="Flag 19 evidence" src="https://github.com/user-attachments/assets/4381ab9d-2771-4b70-9a8f-e29989b3e882" />
+
+**Detection recommendation:** Alert on outbound RDP attempts from a host that was itself an inbound RDP ingress point — a strong signal of a pivot in progress.
+
+---
+
+### Flag 20 — Lateral Movement: Remote Access Tool
+**Tactic/Technique:** Lateral Movement — Remote Desktop Protocol (T1021.001)
+
+**Findings:** `mstsc.exe` was launched with `10.1.0.188` as the target, at 2:10:41 AM.
+
+**Why it matters:** Using the native RDP client makes the pivot attempt look like ordinary IT administration — this blending is exactly why internal RDP needs tighter logging and network segmentation, not just perimeter controls.
+
+```kql
+DeviceProcessEvents
+| where DeviceName == "azuki-sl"
+| where Timestamp between (startofday(datetime(2025-11-19)) .. endofday(datetime(2025-11-21)))
+| where ProcessCommandLine contains "mstsc"
+| project Timestamp, FileName, DeviceName, InitiatingProcessFileName, ProcessCommandLine, InitiatingProcessCommandLine, FolderPath, AccountName, IsProcessRemoteSession
+```
+<img width="1699" alt="Flag 20 evidence" src="https://github.com/user-attachments/assets/d0d87a69-2271-4ccb-b649-47e96ebb6bdb" />
+
+**Detection recommendation:** Restrict internal RDP with network segmentation; alert on `mstsc.exe` launched from a host that received an external RDP session within the same session window.
+
+---
+
+## Intrusion Narrative
+
+A condensed walk through how each finding connects to the next:
+
+1. **External RDP access** from `88.97.178.12` established the initial foothold.
+2. That session authenticated as **`kenji.sato`** — a valid, compromised account.
+3. The attacker ran **`arp -a`** to map the local network.
+4. **`wupdate.ps1`** executed, automating the rest of the chain, and immediately triggered a **C2 beacon** to `78.141.196.6:443`.
+5. A **hidden staging directory** (`WindowsCache`) was created, and **Defender exclusions** (3 extensions + Temp folder) were added to blind AV to what came next.
+6. **`certutil.exe`** pulled down the payload; a renamed **Mimikatz (`mm.exe`)** was staged alongside it.
+7. A **scheduled task** ("Windows Update Check") was created to relaunch `svchost.exe` from the staging directory on every reboot — persistence secured.
+8. Mimikatz ran with **`sekurlsa::logonpasswords`**, dumping credentials from LSASS memory.
+9. Stolen data was **archived** (`export-data.zip`) and **exfiltrated to Discord** via `curl.exe` over HTTPS.
+10. The **Security log was cleared** to erase the authentication trail, and a **hidden admin account ("support")** was planted for future access.
+11. Finally, the attacker attempted to **pivot via RDP** to a second internal host (`10.1.0.188`) using the native `mstsc.exe` client.
 
 ---
 
 ## Detection Gaps & Recommendations
 
-### Gaps Identified
-- Public RDP exposure significantly increased the attack surface.
-- Defender exclusions allowed malicious files to bypass antivirus scanning.
-- Scheduled task creation was not flagged in near-real-time.
-- Credential dumping occurred before automated containment triggered.
-- Event log clearing reduced available forensic evidence for later stages.
+### Gaps identified
+- RDP was reachable and authenticated with a single compromised account — no MFA or conditional access appears to have stopped it.
+- Defender exclusion changes went unnoticed in real time, giving the attacker's tools a clean run.
+- LOLBins (`certutil.exe`, `wevtutil.exe`, `mstsc.exe`) were used throughout specifically because they blend with normal admin activity.
+- Local log clearing removed evidence before it could be reviewed.
+- No alert appears to have fired on new local admin account creation.
 
 ### Recommendations
-- Restrict RDP exposure using Azure NSGs or Azure Bastion; disable direct internet-facing RDP.
-- Alert on any modification to Defender exclusion lists.
-- Detect LOLBin abuse (`certutil.exe`, PowerShell, `rundll32.exe`, etc.) used for downloads.
-- Monitor for LSASS access patterns consistent with credential dumping tools.
-- Build Sentinel analytics rules for: scheduled task creation, local account creation, and Windows event log clearing.
-- Forward logs to a central SIEM continuously so local log-clearing can't destroy evidence.
+- Require MFA on all RDP/remote access, and move RDP behind a bastion host or VPN rather than exposing it directly.
+- Alert in real time on any modification to Defender's exclusion registry keys.
+- Build detections for LOLBin abuse patterns: `certutil -urlcache`, `wevtutil cl`, unexpected `mstsc.exe` chains.
+- Forward all event logs to a centralized, write-protected SIEM so local clearing can't destroy evidence.
+- Alert on local account creation followed by Administrators group membership.
+- Add DLP or anomaly detection for large uploads to consumer platforms (Discord, Telegram, etc.) from non-user hosts.
 
 ---
 
 ## Final Assessment
 
-This investigation reconstructed the complete attack lifecycle using Microsoft Defender for Endpoint and Microsoft Sentinel — from initial RDP access through credential theft, persistence, data collection, exfiltration, and lateral movement, with defense evasion techniques layered throughout. Mapping each stage to MITRE ATT&CK provided a structured view of attacker behavior and surfaced concrete opportunities to strengthen detection engineering and defensive controls.
+The investigation traced a complete intrusion on `azuki-sl` — from an externally-sourced RDP logon using a valid but compromised account, through network reconnaissance, Defender evasion, LOLBin-based payload delivery, scheduled-task persistence, LSASS credential dumping, data staging, and exfiltration via Discord — followed by anti-forensic log clearing, a planted backdoor account, and an attempted pivot to a second internal host. The timeline and MITRE ATT&CK mapping give Azuki's team a clear containment and remediation sequence: rotate `kenji.sato`'s credentials, remove the `support` account, block the identified C2 IP, and close the RDP exposure that started the chain.
 
 ---
 
 ## Analyst Notes
 
-- Report structured for interview and portfolio review.
-- Evidence reproducible via Defender advanced hunting.
-- Techniques mapped directly to MITRE ATT&CK.
+- One of my first end-to-end threat hunts — great for interview walkthroughs, but timestamps are approximate rather than log-verified.
+- All findings reproducible via Defender Advanced Hunting on `azuki-sl`.
+- Every flag ties directly to a MITRE ATT&CK technique for structured storytelling in a portfolio review.
