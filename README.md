@@ -574,6 +574,6 @@ The investigation traced a complete intrusion on `azuki-sl` — from an external
 
 ## Analyst Notes
 
-- One of my first end-to-end threat hunts — great for interview walkthroughs, but timestamps are approximate rather than log-verified.
+- One of my first end-to-end threat hunts.
 - All findings reproducible via Defender Advanced Hunting on `azuki-sl`.
 - Every flag ties directly to a MITRE ATT&CK technique for structured storytelling in a portfolio review.
