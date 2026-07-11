@@ -90,7 +90,8 @@ DeviceProcessEvents
 
 **Result:** `whoami.exe /groups` executed on `nh-fs-01` at 3/11/2026, 1:37:23 PM UTC.
 
-![Q16 - Checking Their Rights](screenshots/Q16-Checking-Rights.png)
+<img width="828" height="492" alt="Q16-Checking-Rights" src="https://github.com/user-attachments/assets/366addcd-7e1f-46ce-baf3-c8eecd55c142" />
+
 
 **Why it matters:** Running `/groups` specifically (rather than a bare `whoami`) shows the attacker was deliberately checking their access level on the file server before deciding what to access next — a clear sign of purposeful, hands-on-keyboard reconnaissance rather than an automated script.
 
@@ -130,7 +131,8 @@ DeviceFileEvents
 
 **Result:** Multiple accesses across `nh-wks-bill-01` and `nh-fs-01`, including `billing_baseline_20260310.lnk`, a `Billing (nh-fs-01) - Shortcut.lnk`, and — notably — `\\NH-FS-01\Billing\2026-03\Pe...\pending_claim_CLM-898936_20260310.csv`, alongside a `billing-baseline.vbs` script.
 
-![Q09 - Out of Role](screenshots/Q09-Out-of-Role.png)
+<img width="1010" height="533" alt="Q09-Out-of-Role" src="https://github.com/user-attachments/assets/9cf0baad-174f-4d60-83d7-bf95e704301a" />
+
 
 **Why it matters:** This confirms the account moved beyond its documented scope of work. Combined with the presence of a `.vbs` script alongside routine shortcuts, this is the point where "accessing files" starts to look like "staging for collection" rather than normal billing work.
 
