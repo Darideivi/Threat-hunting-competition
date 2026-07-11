@@ -1,4 +1,4 @@
-[images.zip](https://github.com/user-attachments/files/29929980/images.zip)
+
 
 # Threat Hunt: Nimbus Health — Valid Account Compromise & Cross-Department Data Collection
 
