@@ -276,5 +276,5 @@ This investigation disproved the initial insider-access theory and confirmed a v
 </p>
 
 <p align="center">
-  <em>Placed 6th out of 13 hunters in "Just Another Day: Compromised Account Investigation" — a live-scored cyber range competition.</em>
+  <em>Placed 6th in "Just Another Day: Compromised Account Investigation" — a live-scored cyber range competition.</em>
 </p>
