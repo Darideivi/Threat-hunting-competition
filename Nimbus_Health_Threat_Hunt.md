@@ -268,3 +268,11 @@ This investigation disproved the initial insider-access theory and confirmed a v
 - The Q04 ("Signal or Noise") finding is included as an open thread rather than a settled conclusion — flagged above for follow-up rather than assumed either way.
 - Evidence reproducible via Microsoft Defender XDR Advanced Hunting.
 - Every phase mapped to at least one MITRE ATT&CK technique.
+
+## Finished in the TOP 10 
+<p align="center">
+
+<img width="1247" height="906" alt="Place_on_line" src="https://github.com/user-attachments/assets/f2a4dfe7-8408-4748-a919-eaadf21ec66d" />
+
+</p>
+
