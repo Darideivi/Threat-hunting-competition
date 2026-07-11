@@ -1,6 +1,6 @@
 
 
-# Threat Hunt: Nimbus Health — Valid Account Compromise & Cross-Department Data Collection
+# Threat Hunt: Nimbus Health — Valid Account Compromise 
 
 <p align="center">
   <img width="683" height="937" alt="Nimbus" src="https://github.com/user-attachments/assets/6b2434bb-2dce-449c-b431-7939c7405467" />
