@@ -269,10 +269,12 @@ This investigation disproved the initial insider-access theory and confirmed a v
 - Evidence reproducible via Microsoft Defender XDR Advanced Hunting.
 - Every phase mapped to at least one MITRE ATT&CK technique.
 
-## Finished in the TOP 10 
+## Finished in the TOP 10
+
 <p align="center">
-
 <img width="1247" height="906" alt="Place_on_line" src="https://github.com/user-attachments/assets/f2a4dfe7-8408-4748-a919-eaadf21ec66d" />
-
 </p>
 
+<p align="center">
+  <em>Placed 6th out of 13 hunters in "Just Another Day: Compromised Account Investigation" — a live-scored cyber range competition.</em>
+</p>
