@@ -1,13 +1,14 @@
 
 
 # Threat Hunt: Nimbus Health — Valid Account Compromise & Cross-Department Data Collection
-<img width="683" height="937" alt="Nimbus" src="https://github.com/user-attachments/assets/6b2434bb-2dce-449c-b431-7939c7405467" />
 
+<p align="center">
+  <img width="683" height="937" alt="Nimbus" src="https://github.com/user-attachments/assets/6b2434bb-2dce-449c-b431-7939c7405467" />
+</p>
 
 <p align="center">
   <em>Disproving an insider-access theory and reconstructing a hands-on-keyboard intrusion using Microsoft Sentinel and Defender for Endpoint</em>
 </p>
-
 ---
 
 ## Incident Brief
