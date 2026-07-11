@@ -185,7 +185,8 @@ DeviceProcessEvents
 
 **Result:** Repeated `cmd.exe /c del /q "C:\User..."` and `cmd.exe /c rmdir /s /q "C:\..."` executions on `nh-wks-bill-01`, starting 3/10/2026 9:55:52 AM UTC.
 
-![Q04 - Signal or Noise](screenshots/Q04-Signal-or-Noise.png)
+<img width="996" height="472" alt="Q04-Signal-or-Noise" src="https://github.com/user-attachments/assets/0313fe3e-5042-4911-9ec3-8f9262f078a1" />
+
 
 **Why it matters:** This is flagged here rather than folded into the narrative above because the conclusion on it isn't settled yet — it could be routine cleanup (a scheduled script, temp-file housekeeping) or it could be the attacker clearing traces of staged files. Given the query title ("Signal or Noise"), this was the specific question under investigation; worth confirming which files were being deleted and whether the timing lines up with the staging activity in Phase 4–5 before calling it either way.
 
